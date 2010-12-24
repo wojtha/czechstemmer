@@ -1,0 +1,400 @@
+<?php
+// $Id$
+
+/**
+ * @file
+ * Improve search on Czech sites by reducing words to their stem.
+ *
+ * Based on the Czech stemming algorithm created as a diploma thesis by its original author David Hellebrand
+ * (http://www.davehell.cz).
+ *
+ * The original Alghoritm was released under GNU GPL 2 and was written in Snowball - a small string processing
+ * language designed for creating stemming algorithms (http://snowball.tartarus.org).
+ *
+ */
+
+define('CZSTEM_DBG', FALSE);
+define('CZSTEM_VOWEL', 'aeiouyáéěíóúůý');
+define('CZSTEM_CONSONANT', 'bcčdďfghjklmnňpqrřsštťvwxzž');
+define('CZSTEM_AEIOU', 'aeiou');
+
+/* --- HOOKS ---------------------------------------------------------------- */
+
+/**
+ * Implementation of hook_search_preprocess().
+ */
+function czechstemmer_search_preprocess($text) {
+  // split words from noise and remove apostrophes
+  $words = preg_split('/([^a-zA-ZáéěíóúůýčdďňřšťžÁÉĚÍÓÚŮÝČDĎŇŘŠŤŽ\']+)/u', $text, -1, PREG_SPLIT_DELIM_CAPTURE);
+
+  // process each word
+  foreach ($words as $k => $word) {
+    // word, whitespace, word, ...
+    if ($k % 2 == 0) {
+      $words[$k] = czechstemmer_stem($word);
+    }
+  }
+
+  if (drupal_strlen($sentence = implode('', $words)) >= variable_get('minimum_word_size', 3)) {
+    CZSTEM_DBG && dpm($words);
+    czechstemmer_postlude($sentence);
+    return $sentence;
+  }
+
+  return $text;
+}
+
+/* --- STEMMING ------------------------------------------------------------- */
+
+
+
+function czechstemmer_exceptions(&$word) {
+  $exceptions = array(
+    'být' => '/^(být|jsem|jsi|je|jsme|jste|jsou|byl|buď|buďte|buďme|jsa|jsouc|jsouce|budu|budeš|bude|budeme|budete|budou)$/',
+    'mít' => '/^(mít|mám|máš|má|máme|máte|mají|měl|měj|mějte|mějme|maje|majíc|majíce)$/',
+    'jít' => '/^(jít|jdu|jdeš|jde|jdeme|jdete|jdou|šel|šla|šlo|šli|jdi|pojď|jděte|jděme|pojďte|jda|jdouc|jdouce|půjdu|půjdeš|půjde|půjdeme|půjdete|půjdou)$/',
+    'jíst' => '/^(jíst|jím|jíš|jí|jíme|jíte|jedí|jedl|jeden|jez|jezte|jezme|jeda|jedouc|jedouce)$/',
+    'sníst' => '/^(sníst|sním|sníš|sní|sníme|sníte|snědí|snědl|sněden|sněz|snězte|snězme)$/',
+    'vidět' => '/^(vidět|vidím|vidíš|vidíme|vidíte|vidí|viděl|viděn|viz|vizte|vizme|vida|vidouc|vidouce)$/',
+    'vedět' => '/^(vědět|vím|víš|ví|víme|víte|vědí|věděl|věděn|věz|vězte|vězme|věda|vědouc|vědouce)$/',
+    'chtít' => '/^(chtít|chci|chceš|chce|chceme|chcete|chtějí|chtěl|chtěn|chtěj|chtějte|chtějme|chtě|chtěje|chtíc|chtějíc|chtíce|chtějíce)$/',
+  );
+
+  $count = NULL;
+  foreach ($exceptions as $replace => $search) {
+    $word = preg_replace($search, $replace, $word, -1, $count);
+    if ($count) {
+      CZSTEM_DBG && dpm(__FUNCTION__);
+      return TRUE;
+    }
+  }
+
+  return FALSE;
+}
+
+function czechstemmer_replace($search, $replace, &$word) {
+  $count = NULL;
+  $word = preg_replace($search, $replace, $word, -1, $count);
+  return $count ? TRUE : FALSE;
+}
+
+function czechstemmer_replace_arr($replace, &$word) {
+  return preg_replace(array_values($replace), array_keys($replace), $word);
+}
+
+function czechstemmer_nouns_suffixes(&$word, &$found_suffix) {
+
+  $search = '/(ice|ie|ik|ika|ikum|ina|inec|ing|ink|inka|'.
+      'iny|ionář|isko|ismus|ista|ita|itba|itel|'.
+      'ium|ivo|ivum|izna|ián|iér|iště)$/';
+  if (czechstemmer_replace($search, '', $word)) {
+    $found_suffix = TRUE;
+    CZSTEM_DBG && dpm(__FUNCTION__, 'found_suffix');
+    return;
+  }
+
+  if (czechstemmer_replace('/šník$/', 'ch', $word)) {
+    $found_suffix = TRUE;
+    CZSTEM_DBG && dpm(__FUNCTION__, 'found_suffix');
+    return;
+  }
+
+  $search = '/(ník|ace|ajzna|ala|an|ance|ant|aní|as|atér|'.
+      'ař|ba|ce|ctví|dlo|ec|ek|ence|enice|enka|'.
+      'ent|ení|er|erie|est|etí|eček|ečka|'.
+      'ečko|graf|ka|ko|kyně|kář|lo|log|'.
+      'loun|ment|met|měr|na|nce|nda|nice|nka|no|'.
+      'nom|nost|ná|né|néř|ní|oba|obinec|'.
+      'och|or|ost|ot|ota|oun|our|out|ouš|oušek|'.
+      'ov|ovatel|ovec|ovina|ovisko|oviště|ovna|'.
+      'ovné|ovník|ovstvo|ová|oví|oň|se|'.
+      'sloví|stvo|ství|tba|tec|tel|telna|tina|'.
+      'tka|tko|tor|toř|tura|tva|tvo|téka|tí|'.
+      'ucha|ule|unk|ura|uňk|uška|vka|vod|xe|'.
+      'yně|ze|ák|ál|ála|án|ánek|'.
+      'ání|árna|ásek|át|átko|átor|'.
+      'áč|áček|ář|áž|ér|řad|'.
+      'éčko|éř|ík|ín|ínek|írna|'.
+      'íček|íčka|íčko|íř|ýř|'.
+      'ýš|čan|če|čka|čno|čí|'.
+      'ěnka|ění|ětí|řadí|ština)$/';
+  if (czechstemmer_replace($search, '', $word)) {
+    $found_suffix = TRUE;
+    CZSTEM_DBG && dpm(__FUNCTION__, 'found_suffix');
+    return;
+  }
+}
+
+
+function czechstemmer_nouns_endings(&$word, &$found_suffix) {
+
+  $new_word = preg_replace('/němi$/', '', $word);
+  if (strcmp($word, $new_word) !== 0) {
+    $replace = array(
+      '/['. CZSTEM_AEIOU .']$/' => 'ň',        //jablo-n
+      '/y$/' => 'ně',                          //kolegy-ně
+      '/['. CZSTEM_CONSONANT .']$/' => 'ně',   //pis-en,  tres-en
+    );
+    $word = preg_replace(array_keys($replace), array_values($replace), $new_word);
+    $found_suffix = TRUE;
+    return;
+  }
+
+  $endings = array(
+    'ba' => '/(eb|bách|bám|bě|by|bami|bou|bu|bo)$/',
+    'ec' => '/(ců|cem|cům|če)$/',
+    'lo' => '/(le|el|lem|lům|lech|lu|ly|la)$/',
+    'ra' => '/(r|rami|ru|rám|ry|rou|rách|ro)$/',
+    'na' => '/(nou|nami|nách|nám)$/',
+    'e'  => '/(eti|ete|etem)$/',
+    'no' => '/(nem|nech|nům)$/',
+    'va' => '/(vami|vou|vách|vě|vám)$/',
+    'ek' => '/(kovi)$/',
+    'tě' => '/(ti|těm|tím|tích|ť)$/',
+    'g'  => '/(ga|gy|gu|gům|gové|govi|gem|gů)$/',
+    'vo' => '/(vům|vech|vem)$/',
+    'a'  => '/(ami|ách|ou|ám)$/',
+    // němi ^^^
+    'ě'  => '/(ěti|ěmi|ěte|ětem)$/',
+    'ka' => '/(kami|kou|kám)$/',
+    ''   =>
+      '/(at|ata|atech|aty|atům|ba|ce|ci|cích|ec|'.
+      'ech|ek|em|emi|en|ev|eň|ka|kem|ko|ku|'.
+      'kum|ky|kách|ků|kům|lo|na|ni|no|nu|'.
+      'ny|ní|ních|ním|ně|ovi|ové|ra|'.
+      'tě|um|va|vo|vy|zích|zi|ích|ím|'.
+      'ům|a|e|i|o|u|y|é|í|ě|ň|ů|g|k|'.
+      'vu)$/',
+  );
+
+  $count = NULL;
+  foreach ($endings as $replace => $search) {
+    $word = preg_replace($search, $replace, $word, -1, $count);
+    if ($count) {
+      CZSTEM_DBG && dpm(__FUNCTION__, 'found_suffix');
+      return;
+    }
+  }
+}
+
+function czechstemmer_adjectives_suffixes(&$word, &$found_suffix) {
+
+  $search = '/(ací|ační|atý|avý|bilní|cký|'.
+      'cný|cí|ený|eční|ečný|ický|'.
+      'icí|ijský|ilinký|ilý|inkatý|istý|'.
+      'ivní|ičelý|ičitý|ičičký|'.
+      'iční|ičný|kavý|lavý|livý|lý|'.
+      'ntní|oulinký|ouninký|ounký|oučký|'.
+      'ova|ovaný|ovic|ovitý|ovní|ovo|ový|'.
+      'telný|tní|tný|utný|utý|vý|'.
+      'ální|ánský|ární|čí|ěný|'.
+      'ův|nější|ovější|oví|'.
+      'ovnější|ovštější|tější|'.
+      //'čný|čivý|'.
+      'ší)$/';
+  if (czechstemmer_replace($search, '', $word)) {
+    $found_suffix = TRUE;
+    CZSTEM_DBG && dpm(__FUNCTION__, 'found_suffix');
+    return;
+  }
+
+  $search = '/(in|ina|ino|itý|ivý|ičký|inký)$/';
+  if (czechstemmer_replace($search, '', $word)) {
+    $replace = array('č' => '/k$/', 'ch' => '/š$/');
+    czechstemmer_replace_arr($replace, $word);
+    $found_suffix = TRUE;
+    CZSTEM_DBG && dpm(__FUNCTION__, 'found_suffix');
+    return;
+  }
+
+  $search = '/(ký|ský|ovský|štější|ijštější)$/';
+  if (czechstemmer_replace($search, '', $word)) {
+    $replace = array('h' => '/ž$/', 'ch' => '/š$/');
+    czechstemmer_replace_arr($replace, $word);
+    $found_suffix = TRUE;
+    CZSTEM_DBG && dpm(__FUNCTION__, 'found_suffix');
+    return;
+  }
+
+  $search = '/(ný|ní|itelný)$/';
+  if (czechstemmer_replace($search, '', $word)) {
+    $replace = array('h' => '/ž$/', 'ch' => '/š$/', 'k' => '/č$/');
+    czechstemmer_replace_arr($replace, $word);
+    $found_suffix = TRUE;
+    CZSTEM_DBG && dpm(__FUNCTION__, 'found_suffix');
+    return;
+  }
+
+  $search = '/natý$/';
+  if (czechstemmer_replace($search, '', $word)) {
+    $replace = array('k' => '/č$/');
+    czechstemmer_replace_arr($replace, $word);
+    $found_suffix = TRUE;
+    CZSTEM_DBG && dpm(__FUNCTION__, 'found_suffix');
+    return;
+  }
+
+  $search = '/(ejší|ější)$/';
+  if (czechstemmer_replace($search, '', $word)) {
+    $replace = array('k' => '/č$/', 'ck' => '/čť$/', 'sk' => '/šť$/', 'h' => '/ž$/', 'ch' => '/š$/');
+    czechstemmer_replace_arr($replace, $word);
+    $found_suffix = TRUE;
+    CZSTEM_DBG && dpm(__FUNCTION__, 'found_suffix');
+    return;
+  }
+}
+
+function czechstemmer_adjectives_endings(&$word, &$found_suffix) {
+  $endings = array(
+      'ský' => '/(ský|skými|ským|štější|ští|ské|ská|skou|ských|ského|skému|ském)$/',
+      'cký' => '/(cký|čtější|cké|ckému|ckými|ckých|ckým|cká|ckého|ckém|čtí|ckou)$/',
+      'ký' => '/(ký|kého|kým|kému|kých|ké|cí|kými|ká|kou|kém)$/',
+      'chý' => '/(chý|chých|chém|chou|chým|chými|chému|ché|šší|chá|chého)$/',
+      'hý' => '/(hý|hém|hé|há|hého|hých|hými|hou|hým|hému|žší)$/',
+      'rý' => '/(rý|rší|rému|rým|rými|rého|rou|řejší|rá|rých|ří|ré|rém)$/',
+      'avý' => '/aví$/',
+      'í' => '/(ímu|ími|ího|ích|ím)$/',
+      'ův' => '/(ův|ovým|ovi|ovou|ovými|ově|ovy|ovu|ovo|ových|ova)$/',
+      'ý' => '/(ý|ém|ými|ou|ému|é|ých|ejší|á|ým|ého|ější)$/',
+      'in' => '/(in|inými|ina|inu|ino|iných|iným|ině|ini|inou|iny)$/',
+      'ý' => '/í$/',
+  );
+
+  $count = NULL;
+  foreach ($endings as $replace => $search) {
+    $word = preg_replace($search, $replace, $word, -1, $count);
+    if ($count) {
+      CZSTEM_DBG && dpm(__FUNCTION__, 'found_suffix');
+      return;
+    }
+  }
+}
+
+function czechstemmer_verbs_suffixes(&$word, &$found_suffix) {
+  $search = '/(rát|ovat|zat|nout|t|ct|sit|et|sknout|ět|řít|at|it|stit|dit)$/';
+  if (czechstemmer_replace($search, '', $word)) {
+    CZSTEM_DBG && dpm(__FUNCTION__, 'found_suffix');
+    $found_suffix = TRUE;
+  }
+}
+
+function czechstemmer_verbs_endings(&$word, &$found_suffix) {
+  $endings = array(
+      'ovat' => '/(uji|ováno|ovali|ujíce|uj|ujete|ován|uju|ována|ujou|ovány|ovalo|ujíc|ujeme|ujme|ovala|ováni|ují|uje|ovaly|ujte|oval|uješ)$/',
+      'rát' => '/(ereš|ral|ereme|erouc|eru|rány|ralo|erete|rali|erte|erme|erouce|rán|era|raly|ráno|ráni|rala|er|ere|rána|erou)$/',
+      't' => '/(jme|ji|ti|ouc|a|eš|u|ete|li|jou|ouce|ty|jte|j|ješ|ju|ta|la|ly|jíce|jeme|eme|jíc|lo|to|jí|je|jete|ou|l)$/',
+      'zat' => '/(žeš|zal|žíc|zána|zali|žme|žte|záni|zaly|zán|záno|žíce|žou|žeme|žu|žete|zala|zány|že|ž|zalo)$/',
+      'nout' => '/(ne|nuv|nouc|nou|ňte|avši|na|nuli|neme|avše|ato|něme|neš|ňme|ň|nu|av|nuvši|nulo|nul|nuto|ati|nuly|ni|aty|nut|něte|nuti|nuta|nete|nuty|nula|at|nouce|ata|nuvše)$/',
+      'ct' => '/(čete|č|ka|čeni|kouce|kla|kly|čena|češ|kouc|čou|ču|klo|čte|če|čeny|čeme|kl|čme|čen|čeno|kli)$/',
+      'sit' => '/(sily|šeni|se|sím|sil|šena|sí|síc|síš|ste|šeny|s|sili|sila|šeno|šen|síme|síte|sme|síce|silo)$/',
+      'et' => '/(ely|eje|ela|elo|eli|ejí|ejíc|ejíce|el)$/',
+      'sknout' => '/(sknete|skni|sknouc|skla|sknuty|sklo|sknuto|skneš|sknouce|skneme|skne|skněme|skna|skly|sknou|skněte|sknut|sknu|skli|sknuti|sknuta|skl)$/',
+      'ět' => '/(ěni|ěl|ě|ěli|ěly|ěny|ěna|ělo|ěn|ěno|ěla)$/',
+      'řít' => '/(řeš|řel|řeni|řely|řeli|ři|ře|rouce|řeny|řu|řena|ra|řou|rouc|řeno|řelo|řete|řen|řela|řeme)$/',
+      'at' => '/(áte|á|áni|án|ají|ajíc|ána|ám|ány|aje|áš|áno|áme|ajíce)$/',
+      'zit' => '/(ila|ženo|zí|zíc|ze|zila|zím|zíme|zíce|z|zilo|ženy|zte|ili|ily|zíte|zili|il|zil|zme|ilo|žena|žen|zíš|zily|ženi)$/',
+      'stit' => '/(stěny|stěme|stěn|stily|stíc|stila|stěni|stili|stí|stěna|stěte|stíš|stím|stíte|stíme|stěno|stíce|stě|stilo|sti|stil)$/',
+      'dit' => '/(díme|dí|dím|zen|zeno|díte|dily|dil|dilo|díc|ďme|díš|dili|zeni|díce|zena|ď|zeny|dila|dě|ďte)$/',
+      '' => '/(eny|me|ejme|štěni|al|štěno|ím|ali|íme|íce|en|štěn|štěna|aly|íte|ena|ejte|ala|eni|eno|alo|íš|štěny|ej|íc|te)$/',
+  );
+
+  $count = NULL;
+  foreach ($endings as $replace => $search) {
+    $word = preg_replace($search, $replace, $word, -1, $count);
+    if ($count) {
+      CZSTEM_DBG && dpm(__FUNCTION__, 'found_suffix');
+      return;
+    }
+  }
+}
+
+function czechstemmer_adverbs_suffixes(&$word, &$found_suffix) {
+  $search = '/(ky|mo|si|koli|koliv|hle)$/';
+  if (czechstemmer_replace($search, '', $word)) {
+    CZSTEM_DBG && dpm(__FUNCTION__, 'found_suffix');
+    $found_suffix = TRUE;
+  }
+}
+
+function czechstemmer_end_vowel(&$word) {
+  czechstemmer_replace('/['. CZSTEM_VOWEL .']{2,}$/', '', $word);
+}
+
+function czechstemmer_end_double(&$word) {
+  czechstemmer_replace('/(bb|cc|dd|ff|gg|hh|jj|kk|ll|mm|nn|pp|qq|rr|ss|tt|vv|xx|zz)$/', '', $word);
+}
+
+function czechstemmer_postlude(&$text) {
+  $replace = array(
+    'á' => 'a',
+    'é' => 'e',
+    'í' => 'i',
+    'ú' => 'u',
+    'ý' => 'y',
+    'č' => 'c',
+    'ď' => 'd',
+    'ě' => 'e',
+    'ň' => 'n',
+    'ř' => 'r',
+    'š' => 's',
+    'ť' => 't',
+    'ů' => 'u',
+    'ž' => 'z',
+  );
+  $text = str_replace(array_keys($replace), array_values($replace), $text);
+}
+
+/**
+ * Stem a Czech word.
+ */
+function czechstemmer_stem($word) {
+  $word = drupal_strtolower($word);
+
+  if (czechstemmer_exceptions($word)) {
+    return $word;
+  }
+
+  /**
+   * R1 is the region after the first non-vowel following a vowel, or is the
+   * null region at the end of the word if there is no such non-vowel.
+   */
+  $r1 = '';
+  if (preg_match('/['. CZSTEM_VOWEL .'](ch|[^'. CZSTEM_VOWEL .'])/u', $word, $matches, PREG_OFFSET_CAPTURE)) {
+    $r1_cursor = $matches[0][1] + strlen($matches[0][0]);
+    //$r1_cursor = $matches[0][1];
+    $r1 = substr($word, $r1_cursor, strlen($word) - $r1_cursor);
+    if (strlen($r1)) {
+      $pre_r1 = substr($word, 0, $r1_cursor);
+      $dbg = "$pre_r1|$r1";
+
+      $found_suffix = FALSE;
+      czechstemmer_nouns_suffixes($r1, $found_suffix);
+      $found_suffix or czechstemmer_nouns_endings($r1, $found_suffix);
+      $found_suffix or czechstemmer_nouns_suffixes($r1, $found_suffix);
+
+      $found_suffix or czechstemmer_adjectives_suffixes($r1, $found_suffix);
+      $found_suffix or czechstemmer_adjectives_endings($r1, $found_suffix);
+      $found_suffix or czechstemmer_adjectives_suffixes($r1, $found_suffix);
+
+      $found_suffix or czechstemmer_adverbs_suffixes($r1, $found_suffix);
+
+      //$found_suffix or czechstemmer_verbs_suffixes($word, $found_suffix);
+      $found_suffix or czechstemmer_verbs_endings($r1, $found_suffix);
+      $found_suffix or czechstemmer_verbs_suffixes($r1, $found_suffix);
+
+      czechstemmer_end_double($r1);
+      czechstemmer_end_vowel($r1);
+      czechstemmer_end_double($r1);
+
+      $word = $pre_r1 . $r1;
+      CZSTEM_DBG && dpm("$dbg => $word");
+    }
+  }
+
+  return $word;
+}
+
+function czstemmer_test1() {
+  $text = "První, co si obtloustlý traktorista Prokop uvědomil, bylo, že se s ním všechno otřásá v drnčivém rachotu.";
+  dpm(czechstemmer_search_preprocess($text));
+}

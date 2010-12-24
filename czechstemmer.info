@@ -1,0 +1,6 @@
+; $Id$
+name = Czech Stemmer
+description = Improve search on Czech sites by reducing words to their stem.
+package = Search
+dependencies[] = search
+core = 6.x
